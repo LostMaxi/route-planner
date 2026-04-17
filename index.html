@@ -1129,22 +1129,11 @@ function loadPlan(entry){
   setBearing(entry.bearing||0);
   if(entry.fp){
     Object.assign(fp,entry.fp);
-    // sync sliders
-    const map2={speed:'sl-speed',weight:'sl-weight',gap:'sl-gap',cspd:'sl-cspd',cnum:'sl-cnum',clen:'sl-clen',cwid:'sl-cwid'};
-    Object.entries(map2).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=fp[k];});
-    document.getElementById('sl-opa').value=Math.round(fp.opa*100);
-    document.getElementById('car-on').checked=fp.carOn;
-    // sync labels
-    document.getElementById('vl-speed').textContent=speedLbl(fp.speed);
-    document.getElementById('vl-weight').textContent=String(fp.weight);
-    document.getElementById('vl-gap').textContent=String(fp.gap);
-    document.getElementById('vl-opa').textContent=Math.round(fp.opa*100)+'%';
-    document.getElementById('vl-cspd').textContent=fp.cspd.toFixed(1)+'×';
-    document.getElementById('vl-cnum').textContent=String(fp.cnum);
-    document.getElementById('vl-clen').textContent=String(fp.clen);
-    document.getElementById('vl-cwid').textContent=String(fp.cwid);
+    syncSliderValues();
   }
-  entry.paths.forEach(p=>commitPath(p.coords,p.color,p.den));
+  entry.paths.forEach(p=>{
+    try{commitPath(p.coords,p.color,p.den);}catch(err){console.error('loadPlan commitPath:',err);}
+  });
   toast(`已載入「${entry.name}」`);
 }
 
@@ -1210,8 +1199,30 @@ function buildExportJSON(name) {
   };
 }
 
+function syncSliderLabels() {
+  document.getElementById('vl-speed').textContent = speedLbl(fp.speed);
+  document.getElementById('vl-weight').textContent = fp.weight+'px';
+  document.getElementById('vl-gap').textContent = fp.gap+'px';
+  document.getElementById('vl-opa').textContent = Math.round(fp.opa*100)+'%';
+  document.getElementById('vl-cspd').textContent = fp.cspd.toFixed(1)+'×';
+  document.getElementById('vl-cnum').textContent = fp.cnum+'台';
+  document.getElementById('vl-clen').textContent = fp.clen+'px';
+  document.getElementById('vl-cwid').textContent = fp.cwid+'px';
+}
+
+function syncSliderValues() {
+  const slMap = {speed:'sl-speed',weight:'sl-weight',gap:'sl-gap',
+                 cspd:'sl-cspd',cnum:'sl-cnum',clen:'sl-clen',cwid:'sl-cwid'};
+  Object.entries(slMap).forEach(([k,id]) => { const el=document.getElementById(id); if(el) el.value=fp[k]; });
+  document.getElementById('sl-opa').value = Math.round(fp.opa*100);
+  document.getElementById('car-on').checked = fp.carOn;
+  syncSliderLabels();
+}
+
 function loadFromJSON(data) {
-  if (!data.version || !data.paths) { toast('JSON 格式不正確'); return false; }
+  if (!data.version || !data.paths || !Array.isArray(data.paths)) {
+    toast('JSON 格式不正確'); return false;
+  }
   clearAll(true);
   if (data.map) {
     map.jumpTo({ center: data.map.center, zoom: data.map.zoom, bearing: data.map.bearing || 0 });
@@ -1219,21 +1230,24 @@ function loadFromJSON(data) {
   }
   if (data.flowParams) {
     Object.assign(fp, data.flowParams);
-    const slMap = {speed:'sl-speed',weight:'sl-weight',gap:'sl-gap',
-                   cspd:'sl-cspd',cnum:'sl-cnum',clen:'sl-clen',cwid:'sl-cwid'};
-    Object.entries(slMap).forEach(([k,id]) => { const el=document.getElementById(id); if(el) el.value=fp[k]; });
-    document.getElementById('sl-opa').value = Math.round(fp.opa*100);
-    document.getElementById('car-on').checked = fp.carOn;
-    document.getElementById('vl-speed').textContent = speedLbl(fp.speed);
-    document.getElementById('vl-weight').textContent = String(fp.weight);
-    document.getElementById('vl-gap').textContent = String(fp.gap);
-    document.getElementById('vl-opa').textContent = Math.round(fp.opa*100)+'%';
-    document.getElementById('vl-cspd').textContent = fp.cspd.toFixed(1)+'×';
-    document.getElementById('vl-cnum').textContent = String(fp.cnum);
-    document.getElementById('vl-clen').textContent = String(fp.clen);
-    document.getElementById('vl-cwid').textContent = String(fp.cwid);
+    syncSliderValues();
   }
-  data.paths.forEach(p => commitPath(p.coords, p.color, p.den));
+  // Commit paths — must wait for map style to be ready
+  let ok = 0, fail = 0;
+  function doPaths() {
+    data.paths.forEach(p => {
+      try {
+        if (p.coords && p.coords.length >= 2) {
+          commitPath(p.coords, p.color || '#00e07a', p.den || 'L');
+          ok++;
+        }
+      } catch(err) { fail++; console.error('commitPath failed:', err); }
+    });
+    toast(fail ? `已匯入 ${ok} 條動線（${fail} 條失敗）` : `已匯入 ${ok} 條動線`);
+  }
+  // If map style not loaded yet, wait for it
+  if (map.isStyleLoaded()) { doPaths(); }
+  else { map.once('load', doPaths); }
   return true;
 }
 
@@ -1259,9 +1273,12 @@ document.getElementById('import-file').addEventListener('change', function() {
   const reader = new FileReader();
   reader.onload = e => {
     try {
-      const data = JSON.parse(e.target.result);
-      if (loadFromJSON(data)) toast('已匯入「' + (data.name || file.name) + '」');
-    } catch(err) { toast('JSON 解析失敗：' + err.message); }
+      // Strip UTF-8 BOM if present
+      let text = e.target.result;
+      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+      const data = JSON.parse(text);
+      loadFromJSON(data);
+    } catch(err) { toast('JSON 解析失敗：' + err.message); console.error('Import error:', err); }
   };
   reader.readAsText(file, 'utf-8');
 });
