@@ -6,7 +6,7 @@
 <title>動線規劃</title>
 <link href="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Noto+Sans+TC:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -19,7 +19,7 @@
   --muted:#48566a;
   --hi:#e4e8f2;
   --red:#ff2a2a;--amber:#ff9500;--green:#00e07a;--blue:#0055ff;
-  --sans:'Noto Sans TC',sans-serif;
+  --sans:'Inter','Noto Sans TC',sans-serif;
   --mono:'DM Mono',monospace;
 }
 html,body{width:100%;height:100%;overflow:hidden;background:var(--ink);}
@@ -554,10 +554,8 @@ document.getElementById('apply-btn').onclick=()=>{
         map.setPaintProperty(`p-pulse-${p.id}`,'line-width',Math.max(1,w2-2));
       }catch{}
     }catch{}
-    // restart dash animation with new fp
-    cancelAnimationFrame(p.dashRaf);
-    p.dashPhase=0;
-    startPulse(p);
+    // restart flow dots with new fp
+    startFlowDots(p);
     if(fp.carOn)startCars(p);
   });
   toast('已套用');
@@ -662,7 +660,7 @@ function commitPath(coords,color,den){
   // Layer 3: Bright pulse line on top (animated opacity)
   map.addLayer({id:`p-pulse-${id}`,type:'line',source:`p-src-${id}`,
     layout:{'line-cap':'round','line-join':'round'},
-    paint:{'line-color':'#ffffff','line-width':Math.max(1,w-2),'line-opacity':0}});
+    paint:{'line-color':'#ffffff','line-width':Math.max(1,w-2),'line-opacity':0.10}});
 
   // Layer 4: Direction arrows along path
   map.addLayer({id:`p-arr-${id}`,type:'symbol',source:`p-src-${id}`,
@@ -691,40 +689,66 @@ function commitPath(coords,color,den){
     layers:[`p-bg-${id}`,`p-glow-${id}`,`p-line-${id}`,`p-pulse-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
     sources:[`p-src-${id}`,`p-mid-${id}`],
     dashRaf:null,dashPhase:0,
-    carMarkers:[],carRafs:[]};
+    carMarkers:[],carRafs:[],
+    flowMarkers:[],flowRafs:[]};
 
-  startPulse(pathObj);
+  startFlowDots(pathObj);
   st.paths.push(pathObj);
   if(fp.carOn)startCars(pathObj);
   renderLayers();
 }
 
 // ═══════════════════════
-//  PULSE ANIMATION (replaces unreliable dasharray animation)
+//  FLOW DOT ANIMATION (DOM Markers — no GL paint changes per frame)
 // ═══════════════════════
-function startPulse(p){
-  const pulseId=`p-pulse-${p.id}`;
-  let phase=0;
+function startFlowDots(p){
+  stopFlowDots(p);
+  const{s,total}=buildSamples(p.coords);
+  if(total<1)return;
+  const dotCount=Math.max(2,Math.min(4,Math.ceil(total/30)));
+  const mps=Math.max(4,(3000-fp.speed)/48)*0.8;
+  const dur=(total/mps)*1000;
 
-  function frame(){
-    if(!map.getLayer(pulseId)){p.dashRaf=requestAnimationFrame(frame);return;}
+  for(let i=0;i<dotCount;i++){
+    const offset=i/dotCount;
+    const anchor=document.createElement('div');
+    anchor.style.cssText='width:0;height:0;position:relative;';
+    const dot=document.createElement('div');
+    dot.style.cssText=`
+      position:absolute;left:-4px;top:-4px;
+      width:8px;height:8px;border-radius:50%;
+      background:${p.color};
+      box-shadow:0 0 6px ${p.color},0 0 14px ${p.color};
+      pointer-events:none;opacity:0;
+    `;
+    anchor.appendChild(dot);
+    const marker=new maplibregl.Marker({element:anchor,anchor:'center'});
+    marker.setLngLat(sampleAt(s,total,offset).c).addTo(map);
+    p.flowMarkers.push(marker);
 
-    // Sine wave pulse: white highlight fades in and out
-    // Speed: fp.speed 200(fast)→3000(slow) maps to angular velocity
-    const angSpeed=fp.speed<=300?0.08:fp.speed<=600?0.06:fp.speed<=1200?0.04:fp.speed<=2000?0.025:0.015;
-    phase+=angSpeed;
-
-    // Opacity oscillates between 0 and peak
-    const peak=fp.opa*0.35; // pulse peak relative to main opacity
-    const opa=peak*(0.5+0.5*Math.sin(phase));
-
-    try{
-      map.setPaintProperty(pulseId,'line-opacity',opa);
-    }catch{}
-
-    p.dashRaf=requestAnimationFrame(frame);
+    let t0=null;
+    function dotFrame(ts){
+      if(!t0)t0=ts-offset*dur;
+      const elapsed=(ts-t0)%dur;
+      const t=elapsed/dur;
+      const{c}=sampleAt(s,total,t);
+      const fade=0.1;
+      let opa=1;
+      if(t<fade)opa=t/fade;
+      else if(t>1-fade)opa=(1-t)/fade;
+      dot.style.opacity=opa.toFixed(3);
+      marker.setLngLat(c);
+      p.flowRafs[i]=requestAnimationFrame(dotFrame);
+    }
+    p.flowRafs.push(requestAnimationFrame(dotFrame));
   }
-  p.dashRaf=requestAnimationFrame(frame);
+}
+
+function stopFlowDots(p){
+  if(p.flowRafs)p.flowRafs.forEach(r=>cancelAnimationFrame(r));
+  p.flowRafs=[];
+  if(p.flowMarkers)p.flowMarkers.forEach(m=>m.remove());
+  p.flowMarkers=[];
 }
 
 // ═══════════════════════
@@ -847,6 +871,7 @@ function deletePath(id){
   const p=st.paths[idx];
   cancelAnimationFrame(p.dashRaf);
   stopCars(p);
+  stopFlowDots(p);
   p.layers.forEach(l=>{try{map.removeLayer(l);}catch{}});
   p.sources.forEach(s=>{try{map.removeSource(s);}catch{}});
   st.paths.splice(idx,1);
