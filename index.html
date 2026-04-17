@@ -665,11 +665,6 @@ function removeTmp(){if(map.getSource(TSRC))map.getSource(TSRC).setData(eGeo());
 // ═══════════════════════
 function commitPath(coords,color,den){
   if(coords.length<2)return;
-  // Guard: if map style not loaded yet, queue and retry after load
-  if(!map.isStyleLoaded()){
-    map.once('load',()=>commitPath(coords,color,den));
-    return;
-  }
   removeTmp();
   const id=++st.idSeq;
   const w=fp.weight+(den==='F'?2:0);
@@ -1134,6 +1129,7 @@ function loadPlan(entry){
   entry.paths.forEach(p=>{
     try{commitPath(p.coords,p.color,p.den);}catch(err){console.error('loadPlan commitPath:',err);}
   });
+  map.triggerRepaint();
   toast(`已載入「${entry.name}」`);
 }
 
@@ -1232,7 +1228,7 @@ function loadFromJSON(data) {
     Object.assign(fp, data.flowParams);
     syncSliderValues();
   }
-  // Commit paths — must wait for map style to be ready
+  // Commit paths — wait for map style + one render frame after jumpTo
   let ok = 0, fail = 0;
   function doPaths() {
     data.paths.forEach(p => {
@@ -1243,11 +1239,16 @@ function loadFromJSON(data) {
         }
       } catch(err) { fail++; console.error('commitPath failed:', err); }
     });
+    // Force map to re-render all new layers
+    map.triggerRepaint();
     toast(fail ? `已匯入 ${ok} 條動線（${fail} 條失敗）` : `已匯入 ${ok} 條動線`);
   }
-  // If map style not loaded yet, wait for it
-  if (map.isStyleLoaded()) { doPaths(); }
-  else { map.once('load', doPaths); }
+  // Ensure map style loaded + one idle frame before committing
+  function whenReady(fn) {
+    if (map.isStyleLoaded()) { requestAnimationFrame(fn); }
+    else { map.once('load', () => requestAnimationFrame(fn)); }
+  }
+  whenReady(doPaths);
   return true;
 }
 
