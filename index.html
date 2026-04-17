@@ -397,7 +397,7 @@ const fp = {
 
 const st = {
   color:'#00e07a', den:'L',
-  drawing:false, rounding:false, pts:[],
+  drawing:false, rounding:false, pts:[], redo:[],
   paths:[], idSeq:0,
 };
 
@@ -565,10 +565,10 @@ document.getElementById('apply-btn').onclick=()=>{
 // ═══════════════════════
 function setDrawing(on){
   st.drawing=on;
-  if(!on){st.pts=[];removeTmp();}
+  if(!on){st.pts=[];st.redo=[];removeTmp();}
   document.getElementById('draw-btn').classList.toggle('on',on);
   map.getCanvas().classList.toggle('xhair',on||st.rounding);
-  badge(on?'點擊地圖加入節點　雙擊 / 再按「繪製路徑」完成　ESC 取消':'');
+  badge(on?'點擊加入節點　雙擊完成　Ctrl+Z 還原　Ctrl+Y 重做　ESC 取消':'');
 }
 function setRounding(on){
   st.rounding=on;
@@ -585,14 +585,28 @@ document.getElementById('round-btn').onclick=()=>{
   if(st.drawing)setDrawing(false);
   setRounding(!st.rounding);
 };
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){setDrawing(false);setRounding(false);}});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){setDrawing(false);setRounding(false);return;}
+  if(!st.drawing)return;
+  // Ctrl+Z: undo last point
+  if((e.ctrlKey||e.metaKey)&&e.key==='z'&&!e.shiftKey){
+    e.preventDefault();
+    if(st.pts.length>0){st.redo.push(st.pts.pop());updateTmp();}
+    return;
+  }
+  // Ctrl+Y: redo
+  if((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.key==='z'&&e.shiftKey))){
+    e.preventDefault();
+    if(st.redo.length>0){st.pts.push(st.redo.pop());updateTmp();}
+  }
+});
 
 // ═══════════════════════
 //  MAP CLICK
 // ═══════════════════════
 map.on('click',e=>{
   const{lng,lat}=e.lngLat;
-  if(st.drawing){st.pts.push([lng,lat]);updateTmp();return;}
+  if(st.drawing){st.pts.push([lng,lat]);st.redo=[];updateTmp();return;}
   if(st.rounding){commitPath(circleCoords([lng,lat],20,48),st.color,st.den);setRounding(false);return;}
 });
 map.on('dblclick',e=>{
@@ -670,7 +684,7 @@ function commitPath(coords,color,den){
     },
     paint:{'text-color':color,'text-opacity':0.85,'text-halo-color':'rgba(0,0,0,.4)','text-halo-width':1}});
 
-  // Layer 5: Density label at midpoint
+  // Layer 4: Density label at midpoint
   const midC=coords[Math.floor(coords.length/2)];
   map.addSource(`p-mid-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'Point',coordinates:midC},properties:{den}}});
   map.addLayer({id:`p-lbl-${id}`,type:'symbol',source:`p-mid-${id}`,
@@ -679,9 +693,45 @@ function commitPath(coords,color,den){
       'text-allow-overlap':true,'text-ignore-placement':true},
     paint:{'text-color':'#fff','text-halo-color':color,'text-halo-width':3}});
 
+  // Layer 5+6: Entry arrow (head) and Exit arrow (tail)
+  // Compute bearings for head and tail
+  const headBear=(()=>{
+    const dx=(coords[1][0]-coords[0][0])*111320*Math.cos(coords[0][1]*Math.PI/180);
+    const dy=(coords[1][1]-coords[0][1])*111320;
+    return Math.atan2(dx,dy)*180/Math.PI;
+  })();
+  const tailBear=(()=>{
+    const n=coords.length;
+    const dx=(coords[n-1][0]-coords[n-2][0])*111320*Math.cos(coords[n-2][1]*Math.PI/180);
+    const dy=(coords[n-1][1]-coords[n-2][1])*111320;
+    return Math.atan2(dx,dy)*180/Math.PI;
+  })();
+
+  // Head: entry arrow (▶ pointing into the path)
+  map.addSource(`p-head-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'Point',coordinates:coords[0]},properties:{bearing:headBear}}});
+  map.addLayer({id:`p-harr-${id}`,type:'symbol',source:`p-head-${id}`,
+    layout:{
+      'icon-image':'','text-field':'▶','text-size':20,
+      'text-rotate':['get','bearing'],
+      'text-rotation-alignment':'map',
+      'text-allow-overlap':true,'text-ignore-placement':true
+    },
+    paint:{'text-color':color,'text-opacity':0.95,'text-halo-color':'rgba(0,0,0,.6)','text-halo-width':2}});
+
+  // Tail: exit arrow (▶ pointing out of the path)
+  map.addSource(`p-tail-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'Point',coordinates:coords[coords.length-1]},properties:{bearing:tailBear}}});
+  map.addLayer({id:`p-tarr-${id}`,type:'symbol',source:`p-tail-${id}`,
+    layout:{
+      'icon-image':'','text-field':'▶','text-size':20,
+      'text-rotate':['get','bearing'],
+      'text-rotation-alignment':'map',
+      'text-allow-overlap':true,'text-ignore-placement':true
+    },
+    paint:{'text-color':color,'text-opacity':0.95,'text-halo-color':'rgba(0,0,0,.6)','text-halo-width':2}});
+
   const pathObj={id,coords,color,den,
-    layers:[`p-bg-${id}`,`p-glow-${id}`,`p-line-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
-    sources:[`p-src-${id}`,`p-mid-${id}`],
+    layers:[`p-bg-${id}`,`p-glow-${id}`,`p-line-${id}`,`p-arr-${id}`,`p-lbl-${id}`,`p-harr-${id}`,`p-tarr-${id}`],
+    sources:[`p-src-${id}`,`p-mid-${id}`,`p-head-${id}`,`p-tail-${id}`],
     dashRaf:null,dashPhase:0,
     carMarkers:[],carRafs:[]};
 
