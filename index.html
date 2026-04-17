@@ -632,7 +632,7 @@ function commitPath(coords,color,den){
 
   map.addSource(`p-src-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:coords},properties:{}}});
   map.addLayer({id:`p-line-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-opacity':0.4}});
-  map.addLayer({id:`p-dash-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-dasharray':[0.5,fp.gap],'line-opacity':fp.opa}});
+  map.addLayer({id:`p-dash-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-dasharray':[2,fp.gap],'line-opacity':fp.opa}});
   map.addLayer({id:`p-arr-${id}`,type:'symbol',source:`p-src-${id}`,layout:{'symbol-placement':'line-center','text-field':'▶','text-size':13,'text-allow-overlap':true,'text-ignore-placement':true,'symbol-spacing':100,'text-rotation-alignment':'map'},paint:{'text-color':color,'text-opacity':0.95,'text-halo-color':'rgba(0,0,0,.5)','text-halo-width':1}});
 
   const midC=coords[Math.floor(coords.length/2)];
@@ -656,39 +656,48 @@ function commitPath(coords,color,den){
 // ═══════════════════════
 function startDash(p){
   const dashId=`p-dash-${p.id}`;
-  // MapLibre doesn't support dash-offset, so we simulate movement by
-  // cycling through a series of dasharray patterns each frame.
-  // Pattern total length = dot(0.5) + gap, we shift the phase by
-  // prepending progressively longer leading space each step.
-  const DOT=0.5;
-  const STEPS=20; // steps per full cycle
-  let step=0;
+  // MapLibre line-dasharray is in line-width units.
+  // We build a repeating pattern and rotate it each frame to simulate flow.
+  // Pattern: [dash, gap] repeated N times, then shift by removing from front
+  // and appending to back.
+  const N=40; // resolution: more = smoother
+  let phase=0;
 
   function frame(){
     if(!map.getLayer(dashId)){p.dashRaf=requestAnimationFrame(frame);return;}
-    const gap=fp.gap;
-    const cycleLen=DOT+gap;
-    const offset=(step/STEPS)*cycleLen;
-    // Build a phase-shifted dasharray:
-    // [lead-space, dot, trail-space] that sums to cycleLen
-    let arr;
-    if(offset<0.01){
-      arr=[DOT,gap];
-    } else if(offset<DOT){
-      // dot is split: trailing fragment | gap | leading fragment
-      arr=[offset, gap, DOT-offset, 0.01]; // 0.01 prevents zero-length
-    } else {
-      // fully in the gap region
-      const spaceAfter=offset-DOT;
-      const spaceBefore=gap-spaceAfter;
-      arr=[DOT, spaceAfter>0.01?spaceAfter:0.01, 0.01, spaceBefore>0.01?spaceBefore:0.01];
-    }
-    map.setPaintProperty(dashId,'line-dasharray',arr);
-    map.setPaintProperty(dashId,'line-opacity',fp.opa);
+    const dashLen=2;        // dash segment length (in line-width units)
+    const gapLen=fp.gap;    // gap length
+    const total=dashLen+gapLen;
 
-    // Speed: fp.speed 200(fast)→3000(slow), steps per frame
-    const inc=fp.speed<=400?2:fp.speed<=900?1:fp.speed<=1600?0.5:0.25;
-    step=(step+inc)%STEPS;
+    // Create base pattern: one cycle [dash, gap]
+    // Phase shifts by varying the split point
+    const t=(phase%1); // 0..1
+    const shift=t*total;
+
+    // Split into: [leadGap, dash, trailGap]
+    let arr;
+    if(shift<=gapLen){
+      // shift is within the gap portion
+      // pattern: [gap-shift, dash, shift] but we need gap at end → [gap-shift, dash, shift]
+      const g1=gapLen-shift;
+      const g2=shift;
+      arr=g1>0.05?[g1,dashLen,g2>0.05?g2:0.05]:[dashLen,gapLen];
+    } else {
+      // shift is within the dash portion
+      const dashUsed=shift-gapLen;
+      const d1=dashLen-dashUsed;
+      // pattern: [d1(dash), gap, dashUsed(dash)]
+      arr=[d1>0.05?d1:0.05, gapLen, dashUsed>0.05?dashUsed:0.05];
+    }
+
+    try{
+      map.setPaintProperty(dashId,'line-dasharray',arr);
+      map.setPaintProperty(dashId,'line-opacity',fp.opa);
+    }catch{}
+
+    // Speed control: fp.speed 200→3000 maps to phase increment
+    const spd=fp.speed<=300?0.04:fp.speed<=600?0.03:fp.speed<=1200?0.02:fp.speed<=2000?0.012:0.006;
+    phase=(phase+spd)%1;
     p.dashRaf=requestAnimationFrame(frame);
   }
   p.dashRaf=requestAnimationFrame(frame);
