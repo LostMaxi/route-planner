@@ -851,8 +851,10 @@ function startCars(pathObj){
       if(t<fade)opa=t/fade;
       else if(t>1-fade)opa=(1-t)/fade;
       anchor.style.opacity=opa.toFixed(3);
-      // Rotate the car body around its own center
-      el.style.transform=`rotate(${bearing}deg)`;
+      // Rotate car: geographic bearing → screen angle
+      // bearing 0°=north, CSS rotate 0°=right, so offset -90°; subtract map bearing for rotation
+      const screenAngle=bearing-map.getBearing()-90;
+      el.style.transform=`rotate(${screenAngle}deg)`;
 
       marker.setLngLat(c);
       const raf=requestAnimationFrame(carFrame);
