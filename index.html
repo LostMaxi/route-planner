@@ -547,6 +547,7 @@ document.getElementById('apply-btn').onclick=()=>{
     try{
       const w2=fp.weight+(p.den==='F'?2:0);
       try{
+        map.setPaintProperty(`p-bg-${p.id}`,'line-width',w2+6);
         map.setPaintProperty(`p-glow-${p.id}`,'line-width',w2+4);
         map.setPaintProperty(`p-line-${p.id}`,'line-width',w2);
         map.setPaintProperty(`p-line-${p.id}`,'line-opacity',fp.opa);
@@ -631,6 +632,11 @@ function removeTmp(){if(map.getSource(TSRC))map.getSource(TSRC).setData(eGeo());
 // ═══════════════════════
 function commitPath(coords,color,den){
   if(coords.length<2)return;
+  // Guard: if map style not loaded yet, queue and retry after load
+  if(!map.isStyleLoaded()){
+    map.once('load',()=>commitPath(coords,color,den));
+    return;
+  }
   removeTmp();
   const id=++st.idSeq;
   const w=fp.weight+(den==='F'?2:0);
@@ -638,10 +644,15 @@ function commitPath(coords,color,den){
   // Source
   map.addSource(`p-src-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:coords},properties:{}}});
 
-  // Layer 1: Outer glow (wider, semi-transparent)
+  // Layer 0: Dark outline for contrast on satellite
+  map.addLayer({id:`p-bg-${id}`,type:'line',source:`p-src-${id}`,
+    layout:{'line-cap':'round','line-join':'round'},
+    paint:{'line-color':'#000000','line-width':w+6,'line-opacity':0.5}});
+
+  // Layer 1: Outer glow (color, semi-transparent)
   map.addLayer({id:`p-glow-${id}`,type:'line',source:`p-src-${id}`,
     layout:{'line-cap':'round','line-join':'round'},
-    paint:{'line-color':color,'line-width':w+4,'line-opacity':0.15}});
+    paint:{'line-color':color,'line-width':w+4,'line-opacity':0.35}});
 
   // Layer 2: Core line (solid, visible)
   map.addLayer({id:`p-line-${id}`,type:'line',source:`p-src-${id}`,
@@ -677,7 +688,7 @@ function commitPath(coords,color,den){
     paint:{'text-color':'#fff','text-halo-color':color,'text-halo-width':3}});
 
   const pathObj={id,coords,color,den,
-    layers:[`p-glow-${id}`,`p-line-${id}`,`p-pulse-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
+    layers:[`p-bg-${id}`,`p-glow-${id}`,`p-line-${id}`,`p-pulse-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
     sources:[`p-src-${id}`,`p-mid-${id}`],
     dashRaf:null,dashPhase:0,
     carMarkers:[],carRafs:[]};
