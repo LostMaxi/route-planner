@@ -412,11 +412,24 @@ const map = new maplibregl.Map({
              'https://mt1.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}',
              'https://mt2.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}'],
       tileSize:256,maxzoom:20,attribution:'© Google'}},
-    layers:[{id:'gsat',type:'raster',source:'gsat'}]
+    layers:[{id:'gsat',type:'raster',source:'gsat',paint:{'raster-fade-duration':0}}]
   },
   center:[120.312,22.676], zoom:16, bearing:0, pitch:0,
   dragRotate:false, touchZoomRotate:false, attributionControl:false,
+  // ── smoothness tuning ──
+  antialias:true,                  // WebGL MSAA — smoother lines & edges
+  fadeDuration:0,                  // no tile fade-in delay — instant sharp
+  bearingSnap:0,                   // no bearing snap threshold — fluid rotation
+  maxTileCacheSize:200,            // cache more tiles — less reload flicker
+  refreshExpiredTiles:false,       // don't re-fetch during interaction
+  trackResize:true,
+  renderWorldCopies:false,
+  pixelRatio:Math.min(window.devicePixelRatio||1, 2), // retina crisp but capped
 });
+
+// Smoother zoom/pan inertia
+map.scrollZoom.setWheelZoomRate(1/200);    // finer scroll-zoom steps
+map.dragPan.enable({linearity:0.3, easing:t=>t, maxSpeed:1400, deceleration:2500});
 
 // ═══════════════════════
 //  TOAST
@@ -443,8 +456,8 @@ function badge(m){
 //  ZOOM
 // ═══════════════════════
 function syncZoom(){document.getElementById('zoom-val').textContent='z'+map.getZoom().toFixed(2);}
-document.getElementById('zi').onclick=()=>map.easeTo({zoom:map.getZoom()+ZOOM_STEP,duration:150});
-document.getElementById('zo').onclick=()=>map.easeTo({zoom:map.getZoom()-ZOOM_STEP,duration:150});
+document.getElementById('zi').onclick=()=>map.easeTo({zoom:map.getZoom()+ZOOM_STEP,duration:280,easing:t=>1-Math.pow(1-t,3)});
+document.getElementById('zo').onclick=()=>map.easeTo({zoom:map.getZoom()-ZOOM_STEP,duration:280,easing:t=>1-Math.pow(1-t,3)});
 map.on('zoom',syncZoom);
 
 // ═══════════════════════
@@ -480,7 +493,7 @@ async function doSearch(){
   try{
     const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
     const d=await r.json();
-    if(d[0])map.flyTo({center:[+d[0].lon,+d[0].lat],zoom:17,duration:1200});
+    if(d[0])map.flyTo({center:[+d[0].lon,+d[0].lat],zoom:17,duration:1800,curve:1.2,essential:true});
     else toast('找不到該地點');
   }catch{toast('搜尋暫時無法使用');}
 }
@@ -594,7 +607,7 @@ map.on('dblclick',e=>{
 const TSRC='__tmp__',TLY='__tl__',TDT='__td__';
 map.on('load',()=>{
   map.addSource(TSRC,{type:'geojson',data:eGeo()});
-  map.addLayer({id:TLY,type:'line',source:TSRC,paint:{'line-color':['get','color'],'line-width':3,'line-dasharray':[4,3],'line-opacity':0.65}});
+  map.addLayer({id:TLY,type:'line',source:TSRC,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':['get','color'],'line-width':3,'line-dasharray':[4,3],'line-opacity':0.65}});
   map.addLayer({id:TDT,type:'circle',source:TSRC,filter:['==','$type','Point'],paint:{'circle-radius':4,'circle-color':['get','color'],'circle-opacity':0.9}});
   syncZoom();
   loadFromHash();
@@ -618,8 +631,8 @@ function commitPath(coords,color,den){
   const w=fp.weight+(den==='F'?2:0);
 
   map.addSource(`p-src-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:coords},properties:{}}});
-  map.addLayer({id:`p-line-${id}`,type:'line',source:`p-src-${id}`,paint:{'line-color':color,'line-width':w,'line-opacity':0.4}});
-  map.addLayer({id:`p-dash-${id}`,type:'line',source:`p-src-${id}`,paint:{'line-color':color,'line-width':w,'line-dasharray':[0.5,fp.gap],'line-opacity':fp.opa}});
+  map.addLayer({id:`p-line-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-opacity':0.4}});
+  map.addLayer({id:`p-dash-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-dasharray':[0.5,fp.gap],'line-opacity':fp.opa}});
   map.addLayer({id:`p-arr-${id}`,type:'symbol',source:`p-src-${id}`,layout:{'symbol-placement':'line-center','text-field':'▶','text-size':13,'text-allow-overlap':true,'text-ignore-placement':true,'symbol-spacing':100,'text-rotation-alignment':'map'},paint:{'text-color':color,'text-opacity':0.95,'text-halo-color':'rgba(0,0,0,.5)','text-halo-width':1}});
 
   const midC=coords[Math.floor(coords.length/2)];
