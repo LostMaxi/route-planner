@@ -158,20 +158,36 @@ body{font-family:var(--sans);font-size:12px;color:var(--text);}
 #layers-empty{padding:12px;font-size:10px;color:var(--muted);text-align:center;}
 
 /* ─ Params panel (right) ─ */
-#params-panel{width:188px;}
+#params-panel{width:210px;overflow:hidden;}
 .pr{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);}
 .pr:last-child{border-bottom:none;}
 .pr-label{font-size:10px;color:var(--text);flex-shrink:0;min-width:52px;}
-.pr-val{font-size:9px;color:var(--muted);font-family:var(--mono);min-width:28px;text-align:right;flex-shrink:0;}
+.pr-val{font-size:9px;color:var(--muted);font-family:var(--mono);min-width:42px;text-align:right;flex-shrink:0;white-space:nowrap;}
 input[type=range]{
   flex:1;-webkit-appearance:none;height:2px;
   background:rgba(255,255,255,0.10);border-radius:99px;outline:none;
+  margin:0 6px;  /* prevent thumb from clipping panel edges */
 }
 input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;width:11px;height:11px;border-radius:50%;
   background:var(--hi);cursor:pointer;
   box-shadow:0 0 0 2px rgba(255,255,255,0.15);
 }
+/* Firefox thumb */
+input[type=range]::-moz-range-thumb{
+  width:11px;height:11px;border-radius:50%;border:none;
+  background:var(--hi);cursor:pointer;
+  box-shadow:0 0 0 2px rgba(255,255,255,0.15);
+}
+input[type=range]::-moz-range-track{
+  height:2px;background:rgba(255,255,255,0.10);border-radius:99px;border:none;
+}
+/* Preview strip */
+#preview-strip{
+  border-top:1px solid var(--border);
+  height:48px;position:relative;overflow:hidden;
+}
+#preview-canvas{width:100%;height:100%;display:block;}
 /* toggle */
 .tog-row{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border);}
 .tog-label{font-size:10px;color:var(--text);}
@@ -355,6 +371,8 @@ input[type=range]::-webkit-slider-thumb{
         <input type="range" id="sl-cwid" min="4" max="20" step="1" value="10">
         <span class="pr-val" id="vl-cwid">10</span>
       </div>
+      <div class="ph" style="margin-top:0">預覽</div>
+      <div id="preview-strip"><canvas id="preview-canvas"></canvas></div>
       <button class="apply-btn" id="apply-btn">套用至所有動線 →</button>
     </div>
 
@@ -522,15 +540,15 @@ function slBind(id,vlId,key,fmt){
   sl.addEventListener('input',()=>{fp[key]=parseFloat(sl.value);vl.textContent=fmt(fp[key]);});
   vl.textContent=fmt(fp[key]);
 }
-function speedLbl(v){return v<=400?'極快':v<=900?'快':v<=1600?'中':v<=2400?'慢':'極慢';}
+function speedLbl(v){const t=v<=400?'極快':v<=900?'快':v<=1600?'中':v<=2400?'慢':'極慢';return v+' '+t;}
 slBind('sl-speed','vl-speed','speed',speedLbl);
-slBind('sl-weight','vl-weight','weight',v=>String(v));
-slBind('sl-gap','vl-gap','gap',v=>String(v));
+slBind('sl-weight','vl-weight','weight',v=>v+'px');
+slBind('sl-gap','vl-gap','gap',v=>v+'px');
 // opa handled separately (needs /100 conversion)
 slBind('sl-cspd','vl-cspd','cspd',v=>v.toFixed(1)+'×');
-slBind('sl-cnum','vl-cnum','cnum',v=>String(v));
-slBind('sl-clen','vl-clen','clen',v=>String(v));
-slBind('sl-cwid','vl-cwid','cwid',v=>String(v));
+slBind('sl-cnum','vl-cnum','cnum',v=>v+'台');
+slBind('sl-clen','vl-clen','clen',v=>v+'px');
+slBind('sl-cwid','vl-cwid','cwid',v=>v+'px');
 
 // pulse opa stores 0-100 → 0-1
 document.getElementById('sl-opa').addEventListener('input',()=>{fp.opa=parseInt(document.getElementById('sl-opa').value)/100;document.getElementById('vl-opa').textContent=Math.round(fp.opa*100)+'%';});
@@ -809,6 +827,108 @@ map.on('rotate',drawAnt);
 map.on('pitch',drawAnt);
 
 // ═══════════════════════
+//  PREVIEW STRIP (mini animated path preview in params panel)
+// ═══════════════════════
+const pvCv=document.getElementById('preview-canvas');
+const pvCtx=pvCv.getContext('2d');
+let pvOff=0,pvRaf=null,pvCarX=0;
+
+function resizePvCanvas(){
+  const r=pvCv.parentElement.getBoundingClientRect();
+  const dpr=window.devicePixelRatio||1;
+  pvCv.width=r.width*dpr;pvCv.height=r.height*dpr;
+  pvCv.style.width=r.width+'px';pvCv.style.height=r.height+'px';
+  pvCtx.setTransform(dpr,0,0,dpr,0,0);
+}
+resizePvCanvas();
+window.addEventListener('resize',resizePvCanvas);
+
+function drawPreview(){
+  const W=pvCv.parentElement.getBoundingClientRect().width;
+  const H=pvCv.parentElement.getBoundingClientRect().height;
+  pvCtx.clearRect(0,0,W,H);
+  const cx=W/2,cy=H/2;
+  // Draw a gentle S-curve as preview path
+  const pts=[];
+  for(let i=0;i<=60;i++){
+    const t=i/60;
+    const x=12+t*(W-24);
+    const y=cy+Math.sin(t*Math.PI*2)*((H/2)-8);
+    pts.push([x,y]);
+  }
+  const c=st.color;
+  const w=fp.weight;
+
+  // BG outline
+  pvCtx.beginPath();pts.forEach((p,i)=>i?pvCtx.lineTo(p[0],p[1]):pvCtx.moveTo(p[0],p[1]));
+  pvCtx.strokeStyle='rgba(0,0,0,0.5)';pvCtx.lineWidth=w+4;pvCtx.lineCap='round';pvCtx.lineJoin='round';pvCtx.stroke();
+
+  // Color glow
+  pvCtx.beginPath();pts.forEach((p,i)=>i?pvCtx.lineTo(p[0],p[1]):pvCtx.moveTo(p[0],p[1]));
+  pvCtx.strokeStyle=c;pvCtx.globalAlpha=0.35;pvCtx.lineWidth=w+2;pvCtx.stroke();pvCtx.globalAlpha=1;
+
+  // Core line
+  pvCtx.beginPath();pts.forEach((p,i)=>i?pvCtx.lineTo(p[0],p[1]):pvCtx.moveTo(p[0],p[1]));
+  pvCtx.strokeStyle=c;pvCtx.globalAlpha=fp.opa;pvCtx.lineWidth=w;pvCtx.stroke();pvCtx.globalAlpha=1;
+
+  // AntPath flowing dash
+  const hr=parseInt(c.slice(1,3),16),hg=parseInt(c.slice(3,5),16),hb=parseInt(c.slice(5,7),16);
+  pvCtx.beginPath();pts.forEach((p,i)=>i?pvCtx.lineTo(p[0],p[1]):pvCtx.moveTo(p[0],p[1]));
+  pvCtx.strokeStyle=`rgba(${hr},${hg},${hb},0.7)`;
+  pvCtx.lineWidth=Math.max(2,w*0.6);pvCtx.lineCap='butt';
+  pvCtx.setLineDash([10,14]);pvCtx.lineDashOffset=-pvOff;pvCtx.stroke();
+  pvCtx.strokeStyle='rgba(255,255,255,0.2)';pvCtx.lineWidth=Math.max(1,w*0.3);
+  pvCtx.lineDashOffset=-pvOff-7;pvCtx.stroke();pvCtx.setLineDash([]);
+
+  // Entry arrow at start
+  pvCtx.font='14px sans-serif';pvCtx.textAlign='center';pvCtx.textBaseline='middle';
+  pvCtx.fillStyle=c;pvCtx.save();
+  pvCtx.translate(pts[0][0],pts[0][1]);
+  const a0=Math.atan2(pts[2][1]-pts[0][1],pts[2][0]-pts[0][0]);
+  pvCtx.rotate(a0);pvCtx.fillText('▶',0,0);pvCtx.restore();
+
+  // Exit arrow at end
+  pvCtx.save();
+  const ln=pts.length;
+  pvCtx.translate(pts[ln-1][0],pts[ln-1][1]);
+  const a1=Math.atan2(pts[ln-1][1]-pts[ln-3][1],pts[ln-1][0]-pts[ln-3][0]);
+  pvCtx.rotate(a1);pvCtx.fillText('▶',0,0);pvCtx.restore();
+
+  // Mini car
+  if(fp.carOn){
+    const ci=Math.floor(pvCarX)%pts.length;
+    const ni=Math.min(ci+1,pts.length-1);
+    const cp=pts[ci],np=pts[ni];
+    const carA=Math.atan2(np[1]-cp[1],np[0]-cp[0]);
+    pvCtx.save();pvCtx.translate(cp[0],cp[1]);pvCtx.rotate(carA);
+    const cl=fp.clen*0.6,cw=fp.cwid*0.6,cr=Math.round(cw*0.22);
+    pvCtx.fillStyle=c;
+    pvCtx.beginPath();
+    // Rounded rect
+    pvCtx.moveTo(-cl/2+cr,-cw/2);pvCtx.lineTo(cl/2-cr,-cw/2);
+    pvCtx.arcTo(cl/2,-cw/2,cl/2,-cw/2+cr,cr);pvCtx.lineTo(cl/2,cw/2-cr);
+    pvCtx.arcTo(cl/2,cw/2,cl/2-cr,cw/2,cr);pvCtx.lineTo(-cl/2+cr,cw/2);
+    pvCtx.arcTo(-cl/2,cw/2,-cl/2,cw/2-cr,cr);pvCtx.lineTo(-cl/2,-cw/2+cr);
+    pvCtx.arcTo(-cl/2,-cw/2,-cl/2+cr,-cw/2,cr);
+    pvCtx.fill();
+    // headlights
+    pvCtx.fillStyle='rgba(255,245,180,0.9)';pvCtx.fillRect(cl/2-2,-cw/2+1,2,cw*0.3);pvCtx.fillRect(cl/2-2,cw/2-1-cw*0.3,2,cw*0.3);
+    pvCtx.restore();
+  }
+}
+
+function pvFrame(){
+  const spd=Math.max(0.3,(3000-fp.speed)/2000);
+  pvOff+=spd;if(pvOff>2400)pvOff-=2400;
+  const mps=Math.max(0.1,(3000-fp.speed)/3000)*fp.cspd*0.6;
+  pvCarX+=mps;if(pvCarX>=60)pvCarX-=60;
+  drawPreview();
+  pvRaf=requestAnimationFrame(pvFrame);
+}
+// Start preview immediately
+pvRaf=requestAnimationFrame(pvFrame);
+
+// ═══════════════════════
 //  CAR ANIMATION
 // ═══════════════════════
 // Build arc-length samples along path for even interpolation
@@ -865,20 +985,21 @@ function startCars(pathObj){
       overflow:hidden;
     `;
     anchor.style.opacity='0';
-    // Windshield glare
-    const glare=document.createElement('div');
-    glare.style.cssText=`position:absolute;top:2px;left:${Math.round(fp.clen*0.2)}px;width:${Math.round(fp.clen*0.28)}px;height:${Math.round(fp.cwid*0.42)}px;background:rgba(255,255,255,0.2);border-radius:2px;`;
-    el.appendChild(glare);
-    // Headlights
+    // Car direction: RIGHT edge = front (direction of travel)
+    // Windshield (front-right area, translucent blue-white)
+    const ws=document.createElement('div');
+    ws.style.cssText=`position:absolute;top:${Math.round(fp.cwid*0.12)}px;right:${Math.round(fp.clen*0.15)}px;width:${Math.round(fp.clen*0.25)}px;height:${Math.round(fp.cwid*0.76)}px;background:rgba(180,210,240,0.3);border-radius:2px;border:1px solid rgba(255,255,255,0.1);`;
+    el.appendChild(ws);
+    // Headlights (RIGHT = front)
     const hlT=document.createElement('div');
-    hlT.style.cssText=`position:absolute;top:1px;left:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,245,180,0.95);border-radius:2px;`;
+    hlT.style.cssText=`position:absolute;top:1px;right:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,245,180,0.95);border-radius:2px;`;
     const hlB=document.createElement('div');
-    hlB.style.cssText=`position:absolute;bottom:1px;left:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,245,180,0.95);border-radius:2px;`;
-    // Taillights
+    hlB.style.cssText=`position:absolute;bottom:1px;right:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,245,180,0.95);border-radius:2px;`;
+    // Taillights (LEFT = rear)
     const tlT=document.createElement('div');
-    tlT.style.cssText=`position:absolute;top:1px;right:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,30,30,0.95);border-radius:2px;`;
+    tlT.style.cssText=`position:absolute;top:1px;left:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,30,30,0.95);border-radius:2px;`;
     const tlB=document.createElement('div');
-    tlB.style.cssText=`position:absolute;bottom:1px;right:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,30,30,0.95);border-radius:2px;`;
+    tlB.style.cssText=`position:absolute;bottom:1px;left:2px;width:3px;height:${Math.round(fp.cwid*0.32)}px;background:rgba(255,30,30,0.95);border-radius:2px;`;
     el.append(hlT,hlB,tlT,tlB);
     anchor.appendChild(el);
     const marker=new maplibregl.Marker({element:anchor,anchor:'center'});
