@@ -584,6 +584,7 @@ document.getElementById('apply-btn').onclick=()=>{
 function setDrawing(on){
   st.drawing=on;
   if(!on){st.pts=[];st.redo=[];removeTmp();}
+  else{document.activeElement&&document.activeElement.blur();}  // release input focus
   document.getElementById('draw-btn').classList.toggle('on',on);
   map.getCanvas().classList.toggle('xhair',on||st.rounding);
   badge(on?'點擊加入節點　雙擊完成　Ctrl+Z 還原　Ctrl+Y 重做　ESC 取消':'');
@@ -603,21 +604,24 @@ document.getElementById('round-btn').onclick=()=>{
   if(st.drawing)setDrawing(false);
   setRounding(!st.rounding);
 };
+// Use CAPTURE phase so drawing undo/redo intercepts before any input element
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){setDrawing(false);setRounding(false);return;}
   if(!st.drawing)return;
-  // Ctrl+Z: undo last point
-  if((e.ctrlKey||e.metaKey)&&e.key==='z'&&!e.shiftKey){
-    e.preventDefault();
+  const isUndoRedo=(e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='y');
+  if(!isUndoRedo)return;
+  // Block browser native undo/redo entirely while drawing
+  e.preventDefault();e.stopPropagation();
+  // Ctrl+Z (no shift): undo last point
+  if(e.key==='z'&&!e.shiftKey){
     if(st.pts.length>0){st.redo.push(st.pts.pop());updateTmp();}
     return;
   }
-  // Ctrl+Y: redo
-  if((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.key==='z'&&e.shiftKey))){
-    e.preventDefault();
+  // Ctrl+Y or Ctrl+Shift+Z: redo
+  if(e.key==='y'||(e.key==='z'&&e.shiftKey)){
     if(st.redo.length>0){st.pts.push(st.redo.pop());updateTmp();}
   }
-});
+},true);  // ← capture:true
 
 // ═══════════════════════
 //  MAP CLICK
