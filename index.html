@@ -532,6 +532,9 @@ const map = new maplibregl.Map({
   pixelRatio:Math.min(window.devicePixelRatio||1, 2), // retina crisp but capped
 });
 
+// Disable MapLibre built-in keyboard handler (it intercepts Ctrl+Z/Y)
+if(map.keyboard)map.keyboard.disable();
+
 // Smoother zoom/pan inertia
 map.scrollZoom.setWheelZoomRate(1/200);    // finer scroll-zoom steps
 map.dragPan.enable({linearity:0.3, easing:t=>t, maxSpeed:1400, deceleration:2500});
@@ -790,7 +793,7 @@ function setDrawing(on){
   else{document.activeElement&&document.activeElement.blur();}  // release input focus
   document.getElementById('draw-btn').classList.toggle('on',on);
   map.getCanvas().classList.toggle('xhair',on||st.rounding);
-  badge(on?'點擊加入節點　雙擊完成　Ctrl+Z 還原　Ctrl+Y 重做　ESC 取消':'');
+  badge(on?'點擊加入節點　雙擊完成\nCtrl+Z 還原　Ctrl+Y 重做　ESC 取消':'');
 }
 function setRounding(on){
   st.rounding=on;
@@ -807,22 +810,66 @@ document.getElementById('round-btn').onclick=()=>{
   if(st.drawing)setDrawing(false);
   setRounding(!st.rounding);
 };
-// Use CAPTURE phase so drawing undo/redo intercepts before any input element
+// ── Undo/Redo stack for committed paths ──
+const undoStack=[], redoStack=[];
+function removePath(p){
+  // Stop car animations
+  if(p.carRafs)p.carRafs.forEach(r=>cancelAnimationFrame(r));
+  if(p.carMarkers)p.carMarkers.forEach(m=>m.remove());
+  // Remove GL layers then sources
+  (p.layers||[]).forEach(l=>{try{if(map.getLayer(l))map.removeLayer(l);}catch(e){}});
+  (p.sources||[]).forEach(s=>{try{if(map.getSource(s))map.removeSource(s);}catch(e){}});
+  st.paths=st.paths.filter(x=>x.id!==p.id);
+}
+function restorePath(p){
+  commitPath(p.coords,p.color,p.den);
+}
+
+// Use CAPTURE phase so undo/redo intercepts before any input element or MapLibre
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){setDrawing(false);setRounding(false);return;}
-  if(!st.drawing)return;
-  const isUndoRedo=(e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='y');
+  const isUndoRedo=(e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='y'||e.key==='Z'||e.key==='Y');
   if(!isUndoRedo)return;
-  // Block browser native undo/redo entirely while drawing
+  // Always block browser native undo/redo
   e.preventDefault();e.stopPropagation();
-  // Ctrl+Z (no shift): undo last point
-  if(e.key==='z'&&!e.shiftKey){
-    if(st.pts.length>0){st.redo.push(st.pts.pop());updateTmp();}
+  // Skip if user is typing in an input field
+  if(document.activeElement&&document.activeElement.tagName==='INPUT'){
+    document.activeElement.blur();
+  }
+
+  if(st.drawing){
+    // Drawing mode: undo/redo individual nodes
+    if((e.key==='z'||e.key==='Z')&&!e.shiftKey){
+      if(st.pts.length>0){st.redo.push(st.pts.pop());updateTmp();}
+      return;
+    }
+    if(e.key==='y'||e.key==='Y'||(e.key==='z'&&e.shiftKey)||(e.key==='Z'&&e.shiftKey)){
+      if(st.redo.length>0){st.pts.push(st.redo.pop());updateTmp();}
+    }
     return;
   }
-  // Ctrl+Y or Ctrl+Shift+Z: redo
-  if(e.key==='y'||(e.key==='z'&&e.shiftKey)){
-    if(st.redo.length>0){st.pts.push(st.redo.pop());updateTmp();}
+
+  // Non-drawing mode: undo/redo entire committed paths
+  if((e.key==='z'||e.key==='Z')&&!e.shiftKey){
+    if(st.paths.length>0){
+      const last=st.paths[st.paths.length-1];
+      const saved={id:last.id,coords:last.coords,color:last.color,den:last.den};
+      removePath(last);
+      undoStack.push(saved);
+      redoStack.length=0;
+      toast('還原路徑 ('+undoStack.length+')');
+      drawAnt();
+    }
+    return;
+  }
+  if(e.key==='y'||e.key==='Y'||(e.key==='z'&&e.shiftKey)||(e.key==='Z'&&e.shiftKey)){
+    if(undoStack.length>0){
+      const p=undoStack.pop();
+      restorePath(p);
+      redoStack.push(p);
+      toast('重做路徑');
+      drawAnt();
+    }
   }
 },true);  // ← capture:true
 
