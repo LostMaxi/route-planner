@@ -545,14 +545,18 @@ document.getElementById('apply-btn').onclick=()=>{
     stopCars(p);
     // update line paint
     try{
-      map.setPaintProperty(`p-line-${p.id}`,'line-width',fp.weight);
-      map.setPaintProperty(`p-dash-${p.id}`,'line-width',fp.weight);
-      map.setPaintProperty(`p-dash-${p.id}`,'line-opacity',fp.opa);
+      const w2=fp.weight+(p.den==='F'?2:0);
+      try{
+        map.setPaintProperty(`p-glow-${p.id}`,'line-width',w2+4);
+        map.setPaintProperty(`p-line-${p.id}`,'line-width',w2);
+        map.setPaintProperty(`p-line-${p.id}`,'line-opacity',fp.opa);
+        map.setPaintProperty(`p-pulse-${p.id}`,'line-width',Math.max(1,w2-2));
+      }catch{}
     }catch{}
     // restart dash animation with new fp
     cancelAnimationFrame(p.dashRaf);
     p.dashPhase=0;
-    startDash(p);
+    startPulse(p);
     if(fp.carOn)startCars(p);
   });
   toast('已套用');
@@ -627,77 +631,86 @@ function removeTmp(){if(map.getSource(TSRC))map.getSource(TSRC).setData(eGeo());
 // ═══════════════════════
 function commitPath(coords,color,den){
   if(coords.length<2)return;
+  removeTmp();
   const id=++st.idSeq;
   const w=fp.weight+(den==='F'?2:0);
 
+  // Source
   map.addSource(`p-src-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:coords},properties:{}}});
-  map.addLayer({id:`p-line-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-opacity':0.4}});
-  map.addLayer({id:`p-dash-${id}`,type:'line',source:`p-src-${id}`,layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':color,'line-width':w,'line-dasharray':[2,fp.gap],'line-opacity':fp.opa}});
-  map.addLayer({id:`p-arr-${id}`,type:'symbol',source:`p-src-${id}`,layout:{'symbol-placement':'line-center','text-field':'▶','text-size':13,'text-allow-overlap':true,'text-ignore-placement':true,'symbol-spacing':100,'text-rotation-alignment':'map'},paint:{'text-color':color,'text-opacity':0.95,'text-halo-color':'rgba(0,0,0,.5)','text-halo-width':1}});
 
+  // Layer 1: Outer glow (wider, semi-transparent)
+  map.addLayer({id:`p-glow-${id}`,type:'line',source:`p-src-${id}`,
+    layout:{'line-cap':'round','line-join':'round'},
+    paint:{'line-color':color,'line-width':w+4,'line-opacity':0.15}});
+
+  // Layer 2: Core line (solid, visible)
+  map.addLayer({id:`p-line-${id}`,type:'line',source:`p-src-${id}`,
+    layout:{'line-cap':'round','line-join':'round'},
+    paint:{'line-color':color,'line-width':w,'line-opacity':fp.opa}});
+
+  // Layer 3: Bright pulse line on top (animated opacity)
+  map.addLayer({id:`p-pulse-${id}`,type:'line',source:`p-src-${id}`,
+    layout:{'line-cap':'round','line-join':'round'},
+    paint:{'line-color':'#ffffff','line-width':Math.max(1,w-2),'line-opacity':0}});
+
+  // Layer 4: Direction arrows along path
+  map.addLayer({id:`p-arr-${id}`,type:'symbol',source:`p-src-${id}`,
+    layout:{
+      'symbol-placement':'line',
+      'text-field':'▸',
+      'text-size':16,
+      'text-allow-overlap':true,
+      'text-ignore-placement':true,
+      'symbol-spacing':50,
+      'text-rotation-alignment':'map',
+      'text-keep-upright':false
+    },
+    paint:{'text-color':color,'text-opacity':0.85,'text-halo-color':'rgba(0,0,0,.4)','text-halo-width':1}});
+
+  // Layer 5: Density label at midpoint
   const midC=coords[Math.floor(coords.length/2)];
   map.addSource(`p-mid-${id}`,{type:'geojson',data:{type:'Feature',geometry:{type:'Point',coordinates:midC},properties:{den}}});
-  map.addLayer({id:`p-lbl-${id}`,type:'symbol',source:`p-mid-${id}`,layout:{'text-field':['get','den'],'text-size':11,'text-font':['Open Sans Regular','Arial Unicode MS Regular'],'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':'#fff','text-halo-color':color,'text-halo-width':2.5}});
+  map.addLayer({id:`p-lbl-${id}`,type:'symbol',source:`p-mid-${id}`,
+    layout:{'text-field':['get','den'],'text-size':12,
+      'text-font':['Open Sans Regular','Arial Unicode MS Regular'],
+      'text-allow-overlap':true,'text-ignore-placement':true},
+    paint:{'text-color':'#fff','text-halo-color':color,'text-halo-width':3}});
 
   const pathObj={id,coords,color,den,
-    layers:[`p-line-${id}`,`p-dash-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
+    layers:[`p-glow-${id}`,`p-line-${id}`,`p-pulse-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
     sources:[`p-src-${id}`,`p-mid-${id}`],
     dashRaf:null,dashPhase:0,
     carMarkers:[],carRafs:[]};
 
-  startDash(pathObj);
+  startPulse(pathObj);
   st.paths.push(pathObj);
   if(fp.carOn)startCars(pathObj);
   renderLayers();
 }
 
 // ═══════════════════════
-//  DASH ANIMATION
+//  PULSE ANIMATION (replaces unreliable dasharray animation)
 // ═══════════════════════
-function startDash(p){
-  const dashId=`p-dash-${p.id}`;
-  // MapLibre line-dasharray is in line-width units.
-  // We build a repeating pattern and rotate it each frame to simulate flow.
-  // Pattern: [dash, gap] repeated N times, then shift by removing from front
-  // and appending to back.
-  const N=40; // resolution: more = smoother
+function startPulse(p){
+  const pulseId=`p-pulse-${p.id}`;
   let phase=0;
 
   function frame(){
-    if(!map.getLayer(dashId)){p.dashRaf=requestAnimationFrame(frame);return;}
-    const dashLen=2;        // dash segment length (in line-width units)
-    const gapLen=fp.gap;    // gap length
-    const total=dashLen+gapLen;
+    if(!map.getLayer(pulseId)){p.dashRaf=requestAnimationFrame(frame);return;}
 
-    // Create base pattern: one cycle [dash, gap]
-    // Phase shifts by varying the split point
-    const t=(phase%1); // 0..1
-    const shift=t*total;
+    // Sine wave pulse: white highlight fades in and out
+    // Speed: fp.speed 200(fast)→3000(slow) maps to angular velocity
+    const angSpeed=fp.speed<=300?0.08:fp.speed<=600?0.06:fp.speed<=1200?0.04:fp.speed<=2000?0.025:0.015;
+    phase+=angSpeed;
 
-    // Split into: [leadGap, dash, trailGap]
-    let arr;
-    if(shift<=gapLen){
-      // shift is within the gap portion
-      // pattern: [gap-shift, dash, shift] but we need gap at end → [gap-shift, dash, shift]
-      const g1=gapLen-shift;
-      const g2=shift;
-      arr=g1>0.05?[g1,dashLen,g2>0.05?g2:0.05]:[dashLen,gapLen];
-    } else {
-      // shift is within the dash portion
-      const dashUsed=shift-gapLen;
-      const d1=dashLen-dashUsed;
-      // pattern: [d1(dash), gap, dashUsed(dash)]
-      arr=[d1>0.05?d1:0.05, gapLen, dashUsed>0.05?dashUsed:0.05];
-    }
+    // Opacity oscillates between 0 and peak
+    const peak=fp.opa*0.35; // pulse peak relative to main opacity
+    const opa=peak*(0.5+0.5*Math.sin(phase));
 
     try{
-      map.setPaintProperty(dashId,'line-dasharray',arr);
-      map.setPaintProperty(dashId,'line-opacity',fp.opa);
+      map.setPaintProperty(pulseId,'line-opacity',opa);
     }catch{}
 
-    // Speed control: fp.speed 200→3000 maps to phase increment
-    const spd=fp.speed<=300?0.04:fp.speed<=600?0.03:fp.speed<=1200?0.02:fp.speed<=2000?0.012:0.006;
-    phase=(phase+spd)%1;
     p.dashRaf=requestAnimationFrame(frame);
   }
   p.dashRaf=requestAnimationFrame(frame);
