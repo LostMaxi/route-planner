@@ -879,19 +879,28 @@ function drawPreview(){
   pvCtx.strokeStyle='rgba(255,255,255,0.2)';pvCtx.lineWidth=Math.max(1,w*0.3);
   pvCtx.lineDashOffset=-pvOff-7;pvCtx.stroke();pvCtx.setLineDash([]);
 
+  // Draw arrow helper (pure canvas triangle, no font dependency)
+  function pvArrow(x,y,angle,size,col){
+    pvCtx.save();
+    pvCtx.translate(x,y);pvCtx.rotate(angle);
+    pvCtx.beginPath();
+    pvCtx.moveTo(size,0);
+    pvCtx.lineTo(-size*0.6,-size*0.55);
+    pvCtx.lineTo(-size*0.6,size*0.55);
+    pvCtx.closePath();
+    pvCtx.fillStyle=col;pvCtx.fill();
+    pvCtx.strokeStyle='rgba(0,0,0,0.4)';pvCtx.lineWidth=1;pvCtx.stroke();
+    pvCtx.restore();
+  }
+
   // Entry arrow at start
-  pvCtx.font='14px sans-serif';pvCtx.textAlign='center';pvCtx.textBaseline='middle';
-  pvCtx.fillStyle=c;pvCtx.save();
-  pvCtx.translate(pts[0][0],pts[0][1]);
   const a0=Math.atan2(pts[2][1]-pts[0][1],pts[2][0]-pts[0][0]);
-  pvCtx.rotate(a0);pvCtx.fillText('▶',0,0);pvCtx.restore();
+  pvArrow(pts[0][0],pts[0][1],a0,7,c);
 
   // Exit arrow at end
-  pvCtx.save();
   const ln=pts.length;
-  pvCtx.translate(pts[ln-1][0],pts[ln-1][1]);
   const a1=Math.atan2(pts[ln-1][1]-pts[ln-3][1],pts[ln-1][0]-pts[ln-3][0]);
-  pvCtx.rotate(a1);pvCtx.fillText('▶',0,0);pvCtx.restore();
+  pvArrow(pts[ln-1][0],pts[ln-1][1],a1,7,c);
 
   // Mini car
   if(fp.carOn){
