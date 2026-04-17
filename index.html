@@ -25,6 +25,7 @@
 html,body{width:100%;height:100%;overflow:hidden;background:var(--ink);}
 body{font-family:var(--sans);font-size:12px;color:var(--text);}
 #map{position:fixed;inset:0;}
+#ant-canvas{position:fixed;inset:0;z-index:5;pointer-events:none;}
 
 /* ─ UI overlay ─ */
 #ui{position:fixed;inset:0;pointer-events:none;z-index:10;padding:14px;display:grid;
@@ -241,6 +242,7 @@ input[type=range]::-webkit-slider-thumb{
 </head>
 <body>
 <div id="map"></div>
+<canvas id="ant-canvas"></canvas>
 
 <div id="ui">
 
@@ -551,11 +553,8 @@ document.getElementById('apply-btn').onclick=()=>{
         map.setPaintProperty(`p-glow-${p.id}`,'line-width',w2+4);
         map.setPaintProperty(`p-line-${p.id}`,'line-width',w2);
         map.setPaintProperty(`p-line-${p.id}`,'line-opacity',fp.opa);
-        map.setPaintProperty(`p-pulse-${p.id}`,'line-width',Math.max(1,w2-2));
       }catch{}
     }catch{}
-    // restart flow dots with new fp
-    startFlowDots(p);
     if(fp.carOn)startCars(p);
   });
   toast('已套用');
@@ -657,12 +656,7 @@ function commitPath(coords,color,den){
     layout:{'line-cap':'round','line-join':'round'},
     paint:{'line-color':color,'line-width':w,'line-opacity':fp.opa}});
 
-  // Layer 3: Bright pulse line on top (animated opacity)
-  map.addLayer({id:`p-pulse-${id}`,type:'line',source:`p-src-${id}`,
-    layout:{'line-cap':'round','line-join':'round'},
-    paint:{'line-color':'#ffffff','line-width':Math.max(1,w-2),'line-opacity':0.10}});
-
-  // Layer 4: Direction arrows along path
+  // Layer 3: Direction arrows along path
   map.addLayer({id:`p-arr-${id}`,type:'symbol',source:`p-src-${id}`,
     layout:{
       'symbol-placement':'line',
@@ -686,70 +680,75 @@ function commitPath(coords,color,den){
     paint:{'text-color':'#fff','text-halo-color':color,'text-halo-width':3}});
 
   const pathObj={id,coords,color,den,
-    layers:[`p-bg-${id}`,`p-glow-${id}`,`p-line-${id}`,`p-pulse-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
+    layers:[`p-bg-${id}`,`p-glow-${id}`,`p-line-${id}`,`p-arr-${id}`,`p-lbl-${id}`],
     sources:[`p-src-${id}`,`p-mid-${id}`],
     dashRaf:null,dashPhase:0,
-    carMarkers:[],carRafs:[],
-    flowMarkers:[],flowRafs:[]};
+    carMarkers:[],carRafs:[]};
 
-  startFlowDots(pathObj);
   st.paths.push(pathObj);
   if(fp.carOn)startCars(pathObj);
   renderLayers();
+  startAntPath();
 }
 
 // ═══════════════════════
-//  FLOW DOT ANIMATION (DOM Markers — no GL paint changes per frame)
+//  ANT-PATH CANVAS OVERLAY (flowing dashed lines)
 // ═══════════════════════
-function startFlowDots(p){
-  stopFlowDots(p);
-  const{s,total}=buildSamples(p.coords);
-  if(total<1)return;
-  const dotCount=Math.max(2,Math.min(4,Math.ceil(total/30)));
-  const mps=Math.max(4,(3000-fp.speed)/48)*0.8;
-  const dur=(total/mps)*1000;
+const antCv=document.getElementById('ant-canvas');
+const antCtx=antCv.getContext('2d');
+let antOff=0, antRaf=null;
 
-  for(let i=0;i<dotCount;i++){
-    const offset=i/dotCount;
-    const anchor=document.createElement('div');
-    anchor.style.cssText='width:0;height:0;position:relative;';
-    const dot=document.createElement('div');
-    dot.style.cssText=`
-      position:absolute;left:-4px;top:-4px;
-      width:8px;height:8px;border-radius:50%;
-      background:${p.color};
-      box-shadow:0 0 6px ${p.color},0 0 14px ${p.color};
-      pointer-events:none;opacity:0;
-    `;
-    anchor.appendChild(dot);
-    const marker=new maplibregl.Marker({element:anchor,anchor:'center'});
-    marker.setLngLat(sampleAt(s,total,offset).c).addTo(map);
-    p.flowMarkers.push(marker);
+function resizeAntCanvas(){
+  const dpr=window.devicePixelRatio||1;
+  antCv.width=window.innerWidth*dpr;
+  antCv.height=window.innerHeight*dpr;
+  antCv.style.width=window.innerWidth+'px';
+  antCv.style.height=window.innerHeight+'px';
+  antCtx.setTransform(dpr,0,0,dpr,0,0);
+}
+resizeAntCanvas();
+window.addEventListener('resize',resizeAntCanvas);
 
-    let t0=null;
-    function dotFrame(ts){
-      if(!t0)t0=ts-offset*dur;
-      const elapsed=(ts-t0)%dur;
-      const t=elapsed/dur;
-      const{c}=sampleAt(s,total,t);
-      const fade=0.1;
-      let opa=1;
-      if(t<fade)opa=t/fade;
-      else if(t>1-fade)opa=(1-t)/fade;
-      dot.style.opacity=opa.toFixed(3);
-      marker.setLngLat(c);
-      p.flowRafs[i]=requestAnimationFrame(dotFrame);
-    }
-    p.flowRafs.push(requestAnimationFrame(dotFrame));
-  }
+function drawAnt(){
+  antCtx.clearRect(0,0,antCv.width,antCv.height);
+  if(st.paths.length===0)return;
+  st.paths.forEach(p=>{
+    if(p.coords.length<2)return;
+    const pts=p.coords.map(c=>map.project(c));
+    // Draw flowing white dashed line
+    antCtx.beginPath();
+    antCtx.moveTo(pts[0].x,pts[0].y);
+    for(let i=1;i<pts.length;i++) antCtx.lineTo(pts[i].x,pts[i].y);
+    antCtx.strokeStyle='rgba(255,255,255,0.55)';
+    antCtx.lineWidth=Math.max(2,fp.weight*0.6);
+    antCtx.lineCap='butt';
+    antCtx.setLineDash([10,14]);
+    antCtx.lineDashOffset=-antOff;
+    antCtx.stroke();
+    antCtx.setLineDash([]);
+  });
 }
 
-function stopFlowDots(p){
-  if(p.flowRafs)p.flowRafs.forEach(r=>cancelAnimationFrame(r));
-  p.flowRafs=[];
-  if(p.flowMarkers)p.flowMarkers.forEach(m=>m.remove());
-  p.flowMarkers=[];
+function antFrame(){
+  const spd=Math.max(0.3,(3000-fp.speed)/2000);
+  antOff+=spd;
+  if(antOff>2400)antOff-=2400;
+  drawAnt();
+  antRaf=requestAnimationFrame(antFrame);
 }
+
+function startAntPath(){
+  if(!antRaf)antRaf=requestAnimationFrame(antFrame);
+}
+function stopAntPath(){
+  if(antRaf){cancelAnimationFrame(antRaf);antRaf=null;}
+}
+
+// Redraw on map move/zoom so canvas stays synced
+map.on('move',drawAnt);
+map.on('zoom',drawAnt);
+map.on('rotate',drawAnt);
+map.on('pitch',drawAnt);
 
 // ═══════════════════════
 //  CAR ANIMATION
@@ -871,7 +870,6 @@ function deletePath(id){
   const p=st.paths[idx];
   cancelAnimationFrame(p.dashRaf);
   stopCars(p);
-  stopFlowDots(p);
   p.layers.forEach(l=>{try{map.removeLayer(l);}catch{}});
   p.sources.forEach(s=>{try{map.removeSource(s);}catch{}});
   st.paths.splice(idx,1);
@@ -913,6 +911,8 @@ function clearAll(silent){
   if(!silent&&!confirm('確定清空所有動線？'))return;
   [...st.paths].forEach(p=>deletePath(p.id));
   st.idSeq=0;
+  stopAntPath();
+  antCtx.clearRect(0,0,antCv.width,antCv.height);
   history.replaceState(null,'',location.pathname);
 }
 document.getElementById('clear-btn').onclick=()=>clearAll(false);
